@@ -1,5 +1,4 @@
 package service.totp
-
 /**
 Copyright (c) 2011 IETF Trust and the persons identified as
 authors of the code. All rights reserved.
@@ -14,6 +13,7 @@ import java.lang.reflect.UndeclaredThrowableException
 import java.math.BigInteger
 import java.security.GeneralSecurityException
 import java.text.SimpleDateFormat
+import java.time.Instant
 import java.util.*
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
@@ -74,7 +74,7 @@ object TOTP {
      * This method generates a TOTP value for the given
      * set of parameters.
      *
-     * @param key: the shared secret, HEX encoded
+     * @param seed: the shared secret, HEX encoded
      * @param time: a value that reflects a time
      * @param returnDigits: number of digits to return
      * @param crypto: the crypto function to use (HmacSHA1, HmacSHA256, HmacSHA512)
@@ -83,21 +83,24 @@ object TOTP {
      * [truncationDigits] digits
      */
     @JvmOverloads
-    fun generateTOTP(key: String, time: String, returnDigits: String, crypto: String = "HmacSHA1"): String {
-        var time = time
+    fun generateTOTP(seed: String, time: Long = System.currentTimeMillis(), returnDigits: String = "8", crypto: String = "HmacSHA1"): String {
         val codeDigits = Integer.decode(returnDigits)!!.toInt()
         var result: String? = null
 
-        // Using the counter
-        // First 8 bytes are for the movingFactor
-        // Compliant with base RFC 4226 (HOTP)
-        while (time.length < 16)
-            time = "0$time"
+        val msgTime = ByteArray(8)
+        var value = time
+
+        // Converting the instant of time from the long representation to a
+        // big-endian array of bytes (RFC4226, 5.2. Description).
+        var i = 8
+        while (i-- > 0) {
+            msgTime[i] = value.toByte()
+            value = value ushr 8
+        }
 
         // Get the HEX in a Byte[]
-        val msg = hexStr2Bytes(time)
-        val k = hexStr2Bytes(key)
-        val hash = hmac_sha(crypto, k, msg)
+        val sharedKey = hexStr2Bytes(seed)
+        val hash = hmac_sha(crypto, sharedKey, msgTime)
 
         // put selected bytes into result int
         val offset = (hash[hash.size - 1] and 0xf).toInt()
@@ -117,6 +120,21 @@ object TOTP {
         return result
     }
 
+    /**
+     * This method verify a TOTP value.
+     *
+     * @param totp: the TOTP token
+     * @param seed: the shared secret, HEX encoded
+     * @param time: a value that reflects a time
+     * @param returnDigits: number of digits to return
+     * @param crypto: the crypto function to use (HmacSHA1, HmacSHA256, HmacSHA512)
+     *
+     * @return: a boolean result of the validation
+     */
+    fun isValidTOTP(totp: String, key: String, time: Long = System.currentTimeMillis(), returnDigits: String = "8", crypto: String = "HmacSHA1"): Boolean {
+        return totp == generateTOTP(key, time, returnDigits, crypto)
+    }
+
     @JvmStatic
     fun main(args: Array<String>) {
         // Seed for HMAC-SHA1 - 20 bytes
@@ -133,36 +151,33 @@ object TOTP {
                         "3132333435363738393031323334353637383930" +
                         "31323334"
 
-        val T0: Long = 0
-        val X: Long = 30
+        val initialTime: Long = 0
+        val sizeStepTime: Long = 30
         val testTime = longArrayOf(
                 59L, 1111111109L, 1111111111L,
                 1234567890L, 2000000000L, 20000000000L
         )
 
-        var steps = "0"
-        val df = SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
-        df.timeZone = TimeZone.getTimeZone("UTC")
+        val simpleDateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
+        simpleDateFormat.timeZone = TimeZone.getTimeZone("UTC")
 
         try {
-            println("+---------------+-----------------------+------------------+----------+--------+")
-            println("|  Time(sec)    |   Time (UTC format)   | Value of T(Hex)  |   TOTP   | Mode   |")
-            println("+---------------+-----------------------+------------------+----------+--------+")
+            println("+---------------+-----------------------+--------------------+------------+----------+")
+            println("|  Time(sec)    |   Time (UTC format)   |  Value of T(Hex)   |    TOTP    |  Mode    |")
+            println("+---------------+-----------------------+--------------------+------------+----------+")
 
             for (i in testTime.indices) {
-                val T = (testTime[i] - T0) / X
+                val stepTime = (testTime[i] - initialTime) / sizeStepTime
 
-                steps = java.lang.Long.toHexString(T).toUpperCase()
-                while (steps.length < 16) steps = "0$steps"
+                val fmtTime = testTime[i].toString().padEnd(11)
+                val utcTime = simpleDateFormat.format(Date(testTime[i] * 1000))
+                val fmtStepTime = stepTime.toString(16).padStart(16, '0').toUpperCase()
 
-                val fmtTime = String.format("%1$-11s", testTime[i])
-                val utcTime = df.format(Date(testTime[i] * 1000))
+                println("|  $fmtTime  |  $utcTime  |  $fmtStepTime  |  ${generateTOTP(seed,   stepTime, "8", "HmacSHA1"  )}  |  SHA1    |")
+                println("|  $fmtTime  |  $utcTime  |  $fmtStepTime  |  ${generateTOTP(seed32, stepTime, "8", "HmacSHA256")}  |  SHA256  |")
+                println("|  $fmtTime  |  $utcTime  |  $fmtStepTime  |  ${generateTOTP(seed64, stepTime, "8", "HmacSHA512")}  |  SHA512  |")
 
-                println("|  $fmtTime  |  $utcTime  | $steps | ${generateTOTP(seed,   steps, "8", "HmacSHA1"  )} | SHA1   |")
-                println("|  $fmtTime  |  $utcTime  | $steps | ${generateTOTP(seed32, steps, "8", "HmacSHA256")} | SHA256 |")
-                println("|  $fmtTime  |  $utcTime  | $steps | ${generateTOTP(seed64, steps, "8", "HmacSHA512")} | SHA512 |")
-
-                println("+---------------+-----------------------+------------------+----------+--------+")
+                println("+---------------+-----------------------+--------------------+------------+----------+")
             }
         } catch (e: Exception) {
             println("Error : $e")
