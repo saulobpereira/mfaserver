@@ -6,7 +6,7 @@ class MfaServerApplication {
         @JvmStatic
         fun main(args: Array<String>) {
             startKoin(listOf(mfaModule))
-            MfaController(7000).startAplication()
+            MfaController(7000).startApplication()
         }
     }
 }

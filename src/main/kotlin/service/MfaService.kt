@@ -1,5 +1,6 @@
 package service
 
 interface MfaService {
-    fun validate()
+    fun validateToken(fingerprint: String, token: String): String
+    fun generateSeed(fingerprint: String): String
 }
